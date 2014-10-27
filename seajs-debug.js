@@ -11,13 +11,13 @@ if (global.seajs) {
   return
 }
 
-//创建seajs,并且拓展到当前全局对象上
+//创建seajs对象,并且拓展到当前全局对象上,后面会在这上面添加许多属性方法
 var seajs = global.seajs = {
   // The current version of Sea.js being used
   version: "3.0.0"
 }
 
-//创建数据对象
+//创建数据属性对象
 var data = seajs.data = {}
 
 
@@ -503,7 +503,7 @@ else {
       // Dereference the node
       node = null
 
-//执行模块脚本加载完成回调
+//模块脚本加载完成回调
       callback(error)
     }
   }
@@ -830,7 +830,6 @@ function Module(uri, deps) {
   this.uri = uri
 //deps指的是用户use的模块，例如['./a', './b']
   this.dependencies = deps || []
-//保留上面dependencies模块实例的引用
   this.deps = {} // Ref the dependence modules
   this.status = 0
 
@@ -839,11 +838,12 @@ function Module(uri, deps) {
   this._entry = []
 }
 
-// Resolve module.dependencies  根据模块uri来获取各依赖地址
+//给模块构造函数拓展方法
+// Resolve module.dependencies   
 Module.prototype.resolve = function() {
 //this 指向当前实例对象
   var mod = this
-//获取模块依赖，执行use和define时会把依赖更新上去
+//mod.dependencies即用户use的模块，例如 seajs.use("../test/main");
   var ids = mod.dependencies
   var uris = []
 
@@ -856,48 +856,51 @@ Module.prototype.resolve = function() {
   return uris
 }
 
-//把当前模块实例入口entry传给里面具体的各模块
+//把当前模块实例入口entry传给它的依赖模块
 Module.prototype.pass = function() {
   var mod = this
 //获取当前模块实例用户use的模块数组长度
   var len = mod.dependencies.length
 
-//遍历模块_entry对每一项进行操作，这里_entry保存了当前模块实例本身
+//遍历模块_entry，这里_entry保存了当前模块实例对象自己
   for (var i = 0; i < mod._entry.length; i++) {
     var entry = mod._entry[i]
     var count = 0
-//遍历要加载的模块实例
+//遍历依赖模块
     for (var j = 0; j < len; j++) {
-//获取每个模块对应的模块实例
+//获取依赖模块的实例对象
       var m = mod.deps[mod.dependencies[j]]
       // If the module is unload and unused in the entry, pass entry to it
       if (m.status < STATUS.LOADED && !entry.history.hasOwnProperty(m.uri)) {
 //对于没加载和没用过的模块实例，用链接作为属性名保存到entry历史中
         entry.history[m.uri] = true
         count++
-//把大的模块实例入口保存到内部分割各模块实例入口属性上
+//把大的模块实例入口保存到它的依赖模块的入口属性上
         m._entry.push(entry)
-//如果当前这个模块是正在加载中那个，进一步把它的entry也传给它的依赖
+//如果当前这个模块是正在加载中那个
         if(m.status === STATUS.LOADING) {
+//那么把它的entry也传递给它的依赖模块
           m.pass()
         }
       }
     }
+	
     // If has passed the entry to it's dependencies, modify the entry's count and del it in the module
     if (count > 0) {
-//如果把入口传给当前模块实例下的各模块以后，把remain属性设为use里要加载模块的长度
+//如果把入口传给当前模块实例下的各模块以后，把remain属性值设为它的依赖值，-1是因为remain初始化为1
       entry.remain += count - 1
-//移除实例入口
+//然后从这个模块移除掉这个entry
       mod._entry.shift()
       i--
     }
   }
+
 }
 
-// Load module.dependencies and fire onload when all done  用来加载用户use里指定模块
+// Load module.dependencies and fire onload when all done  用来加载一个模块的相关依赖模块
 Module.prototype.load = function() {
+  //例如seajs.use("../static/hello/src/main")，那么当前模块实例对象就是data.cwd + "_use_" + cid()，它的依赖就是main
   var mod = this
-
   // If the module is being loaded, just wait it onload call   如果已经是加载中及之后状态，就退出，这个方法是用于加载
   if (mod.status >= STATUS.LOADING) {
     return
@@ -906,53 +909,52 @@ Module.prototype.load = function() {
 //把当前模块状态设为加载中
   mod.status = STATUS.LOADING
 
-  // Emit `load` event for plugins such as combo plugin
-//获取当前模块依赖的链接地址
+  // Emit `load` event for plugins such as combo plugin   这里的uris当前调用的模块地址，例如seajs.use("../static/hello/src/main"),这里指的是main.js的具体地址
   var uris = mod.resolve()
+  
 //触发加载事件，并把uri作为数据
   emit("load", uris)
 
-//遍历uris，获取当前实例每个模块的具体链接地址，返回对应模块的实例
+//遍历uris,即要加载的依赖
   for (var i = 0, len = uris.length; i < len; i++) {
-//把各模块实例保存到对应模块在deps的属性上，属性名即为use上的模块名称
+//把当前模块依赖的实例对象保存到当前模块的deps属性上，而dependencies属性保存的是依赖的名称，例如：../static/hello/src/main
     mod.deps[mod.dependencies[i]] = Module.get(uris[i])
   }
 
-  // Pass entry to it's dependencies  如果模块没有dependencies，就保留entry，传递不了
+  // Pass entry to it's dependencies
   mod.pass()
-
+  
   // If module has entries not be passed, call onload
-//当mod._entry存在实例的时候，表示当前模块已经没有dependencies，可以调用onload触发模块加载完成的回调了
   if (mod._entry.length) {
+//如果存在实例入口的话，调用onload事件（最后没有依赖的模块会保留这个_entry）
     mod.onload()
     return
   }
 
-  // Begin parallel loading  平行请求
+  // Begin parallel loading  模块的加载是平行的
 //缓存起来是因为ie6-9的缓存问题，把请求集中到最后一起发送
   var requestCache = {}
   var m
 
   for (i = 0; i < len; i++) {
-//获取缓存的模块实例，这里的缓存模块随着新脚本加载进来define不断拓展，这里的m指的是需要请求的模块实例
+//获取缓存的依赖模块实例对象（在创建的时候就会缓存进cachedMods）
     m = cachedMods[uris[i]]
 
-//如果还没获取需要请求模块的发送请求requestCache
+//如果状态是还没有获取，那就去获取模块
     if (m.status < STATUS.FETCHING) {
       m.fetch(requestCache)
     }
-//如果已经获取且保存了requestCache
+//如果模块已经获取且保存了，那么就进行加载
     else if (m.status === STATUS.SAVED) {
-/**为什么调用load**/
       m.load()
     }
   }
 
   // Send all requests at last to avoid cache bug in IE6-9. Issues#808
-//这里遍历每一个需要请求的资源
+//这里遍历每一个缓存好的发送请求
   for (var requestUri in requestCache) {
     if (requestCache.hasOwnProperty(requestUri)) {
-//正式发起对资源的请求
+//正式发起对当前模块依赖资源的请求
       requestCache[requestUri]()
     }
   }
@@ -969,7 +971,7 @@ Module.prototype.onload = function() {
     var entry = mod._entry[i]
 //如果没有把entry传给当前模块实例的各组成模块的话，remain默认为1
     if (--entry.remain === 0) {
-//执行use模块加载完成时的回调(mod.callback)
+//执行当前模块加载完成时的回调
       entry.callback()
     }
   }
@@ -1069,7 +1071,7 @@ Module.prototype.exec = function () {
   return mod.exports
 }
 
-// Fetch a module  主要是保存链接的发送请求和定义回调
+// Fetch a module  获取模块的请求
 Module.prototype.fetch = function(requestCache) {
   var mod = this
   var uri = mod.uri
@@ -1080,7 +1082,7 @@ Module.prototype.fetch = function(requestCache) {
   // Emit `fetch` event for plugins such as combo plugin 插件支持
   var emitData = { uri: uri }
   emit("fetch", emitData)
-//requestUri指的是需要请求的那个脚本模块
+//requestUri 指的就是依赖模块的资源地址
   var requestUri = emitData.requestUri || uri
 
   // Empty uri or a non-CMD module
@@ -1095,8 +1097,9 @@ Module.prototype.fetch = function(requestCache) {
     return
   }
 
-//把链接作为属性名保存到提取和回调列表
+//把链接作为属性名保存到提取列表，状态为已提取
   fetchingList[requestUri] = true
+//把资源地址和该依赖模块对象保存到回调列表，在资源加载完成时使用
   callbackList[requestUri] = [mod]
 
   // Emit `request` event for plugins such as text plugin
@@ -1107,30 +1110,29 @@ Module.prototype.fetch = function(requestCache) {
     charset: isFunction(data.charset) ? data.charset(requestUri) || 'utf-8' : data.charset
   })
 
-//如果执行request事件没有产requested
+//如果执行request事件没有产requested(不是已经请求过的)
   if (!emitData.requested) {
     requestCache ?
-//存在请求缓存的话，那么以模块请求地址为名缓存发送请求函数
+//那么以模块请求地址为名缓存发送请求函数
       requestCache[emitData.requestUri] = sendRequest :
-//不存在的话，直接调用发送请求函数
+//不存在requestCache的话，直接调用发送请求
       sendRequest()
   }
 
-//发送对模块的请求
+//发送对模块请求的函数，因为是平行加载，所以先缓存起来
   function sendRequest() {
     seajs.request(emitData.requestUri, emitData.onRequest, emitData.charset)
   }
 
-//这里sctipr.onload完成，该脚本也define好了
+//模块脚本加载完成时调用的函数
   function onRequest(error) {
-//从正在获取列表删除
+//从提取中列表删除该模块，因为已经加载了
     delete fetchingList[requestUri]
-//设置到已经获取列表
+//并且把该模块添加到已经提取的列表中
     fetchedList[requestUri] = true
 
-    // Save meta data of anonymous module  
+    // Save meta data of anonymous module  保存匿名模块元信息，且把模块状态设为saved
     if (anonymousMeta) {
-//该函数同时会把模块状态设为saved
       Module.save(uri, anonymousMeta)
       anonymousMeta = null
     }
@@ -1139,13 +1141,13 @@ Module.prototype.fetch = function(requestCache) {
     var m, mods = callbackList[requestUri]
 //调用了就从回调列表删除
     delete callbackList[requestUri]
-//这里的m指的是刚加载上去的模块
+//从头开始一个一个获取模块
     while ((m = mods.shift())) {
       // When 404 occurs, the params error will be true
       if(error === true) {
         m.error()
       }
-//没有出现错误，调用load加载新加载进来模块需要的模块等
+//没出错就调用load，因为这里是指当前模块的依赖加载好了，还需要继续看依赖里面还有没有依赖，直到没有load里面才会调用onload
       else {
         m.load()
       }
@@ -1159,11 +1161,11 @@ Module.resolve = function(id, refUri) {
   var emitData = { id: id, refUri: refUri }
   emit("resolve", emitData)
 
-//如果有emitData.uri就返回（执行上面事件回调的时候产生），没有就调用seajs的resolve(id2uri)来处理，返回处理好的uri
+//如果有emitData.uri就返回（实行上面事件回调的时候产生），没有就调用seajs的resolve(id2uri)来处理，返回处理好的uri
   return emitData.uri || seajs.resolve(emitData.id, refUri)
 }
 
-// Define a module   用来定义一个模块，保存模块资源位置，依赖和factory等元信息到cachedMods里，调用use加载时就能用上
+// Define a module   用来定义一个模块，脚本加载进来的时候执行这个define函数，解析出依赖等元信息，脚本加载完成时会调用load，加载这里面的依赖
 Module.define = function (id, deps, factory) {
   var argsLen = arguments.length
 
@@ -1192,9 +1194,8 @@ Module.define = function (id, deps, factory) {
   }
 
   // Parse dependencies according to the module factory code
-//如果use里只加载了一个主模块，define传入函数的话
   if (!isArray(deps) && isFunction(factory)) {
-//根据factory函数代码来解析依赖，返回解析好的依赖关系
+//根据factory函数代码（也就是define传进来的函数）来解析依赖，返回解析好的依赖关系
     deps = typeof parseDependencies === "undefined" ? [] : parseDependencies(factory.toString())
   }
 
@@ -1206,7 +1207,7 @@ Module.define = function (id, deps, factory) {
     factory: factory
   }
 
-  // Try to derive uri in IE6-9 for anonymous modules  直接给use方法传一个函数的情况
+  // Try to derive uri in IE6-9 for anonymous modules  直接给use方法传一个函数作为模块的情况
   if (!isWebWorker && !meta.uri && doc.attachEvent && typeof getCurrentScript !== "undefined") {
     var script = getCurrentScript()
 
@@ -1252,22 +1253,22 @@ Module.get = function(uri, deps) {
   return cachedMods[uri] || (cachedMods[uri] = new Module(uri, deps))
 }
 
-// Use function is equal to load a anonymous module   用于加载模块（use）
+// Use function is equal to load a anonymous module
 Module.use = function (ids, callback, uri) {
 //创建模块实例，第二个参数为数组是因为构造函数Module里依赖属性是数组，这里的uri指的是data.cwd + "_use_" + cid，不是各独立模块地址
   var mod = Module.get(uri, isArray(ids) ? ids : [ids])
 
-//保留当前模块实例入口
+//保留当前模块实例入口，供seajs内部使用
   mod._entry.push(mod)
 //定义一个历史属性
   mod.history = {}
-//remain记录了里面包含了多少个独立子模块
+//remain后面用于记录里面包含了多少个独立子模块
   mod.remain = 1
 
-//定义回调函数，在onload中执行
+//定义回调函数
   mod.callback = function() {
     var exports = []
-//获取use里模块的具体uri地址，例如从1.0.0/main -> 1.0.0/main.js 
+//获取use里模块的具体uri地址
     var uris = mod.resolve()
 
 //遍历上面的uris数组
@@ -1276,7 +1277,7 @@ Module.use = function (ids, callback, uri) {
       exports[i] = cachedMods[uris[i]].exec()
     }
 
-//这里在全局环境下运行用户在use里传的callback回调
+//这里在全局环境下运行用户在use定义的模块加载完成时的回调
     if (callback) {
       callback.apply(global, exports)
     }
@@ -1294,7 +1295,7 @@ Module.use = function (ids, callback, uri) {
 
 
 // Public API
-//用于加载一个或多个模块，ids->indepence modules 
+//用于调用一个或多个模块，ids为模块标识
 seajs.use = function(ids, callback) {
 //data.cwd为当前地址，加上_use_和生成的id，组合起来作为uri
   Module.use(ids, callback, data.cwd + "_use_" + cid())
@@ -1302,7 +1303,7 @@ seajs.use = function(ids, callback) {
 }
 
 Module.define.cmd = {}
-//拓展define到当前全局变量上
+//把定义模块的方法拓展到到当前全局变量上
 global.define = Module.define
 
 
@@ -1352,20 +1353,20 @@ seajs.config = function(configData) {
 
 //遍历用户传进来的配置对象
   for (var key in configData) {
-//curr 取得用户定义的配置信息
+//curr 取得用户定义的配置信息值
     var curr = configData[key]
-//prev 取得默认（之前的）的配置信息
+//prev 取得默认（之前的）的配置信息值
     var prev = data[key]
 
     // Merge object config such as alias, vars 
-//对于那些是对象的配置，把用户定义的覆盖旧的或者新增上去
+//对于那些值为对象的配置，使用用户定义的覆盖，或者新增上去
     if (prev && isObject(prev)) {
       for (var k in curr) {
         prev[k] = curr[k]
       }
     }
     else {
-      // Concat array config such as map   对于是数组的配置就接起来
+      // Concat array config such as map   对于值为数组的配置就把新的和旧的接起来
       if (isArray(prev)) {
         curr = prev.concat(curr)
       }
@@ -1378,7 +1379,7 @@ seajs.config = function(configData) {
         curr = addBase(curr)
       }
 
-      // Set config
+      // Set config  最后把处理好的新配置设置到data
       data[key] = curr
     }
   }
